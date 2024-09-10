@@ -7,6 +7,7 @@
 * transformers
 * detectron2-densepose (for densepose predictions)
 * pillow (PIL)
+* controlnet-aux (for openpose conditioning)
 
 Install requirements with:
 

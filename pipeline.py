@@ -15,10 +15,13 @@ import torch
 from PIL import Image, ImageOps
 from torchvision import transforms
 from diffusers import StableDiffusionInpaintPipeline
+from diffusers import StableDiffusionControlNetInpaintPipeline, ControlNetModel
+from controlnet_aux import OpenposeDetector
 
 # Set to True to save intermediate results for debugging
 DEBUG = False
 DEBUG_OUTPUT_PATH = "output/tmp"
+
 
 
 def square_pad(img, bg):
@@ -161,6 +164,7 @@ def preprocess(img, body, head, square_fn=square_pad, size=512):
 
 def run_model(
     model,
+    openpose_model,
     img,
     seg,
     prompt,
@@ -173,9 +177,13 @@ def run_model(
     prompt = prompt + posprompt
 
     # use the pipeline to generate the image
+    pose = openpose_model(img)
+    pose.save("tmp/pose.png")
     images = model(
         prompt=prompt,
+        # image=img,
         image=img,
+        control_image=pose,
         mask_image=seg,
         guidance_scale=guidance_scale,
         num_images_per_prompt=num_images_per_prompt,
@@ -213,6 +221,7 @@ def postprocess(img: Image.Image, orig_size: Tuple[int, int]):
 
 def design_garment(
     model,
+    openpose_model,
     img: Image.Image,
     seg: Image.Image,
     prompt,
@@ -250,6 +259,7 @@ def design_garment(
 
     imgs = run_model(
         model,
+        openpose_model,
         img,
         body,
         prompt,
@@ -264,21 +274,37 @@ def design_garment(
 
 
 def main():
+    # Model settings
+    model_id = "runwayml/stable-diffusion-v1-5"
+
     # Set paths
-    images_dir = "sample_data/images"
-    densepose_dir = "output/densepose"
-    output_dir = "output/sample_output"
+    # images_dir = "sample_data/images"
+    images_dir = "data/viton/images"
+    # densepose_dir = "output/densepose"
+    densepose_dir = "data/viton/densepose_dumps"
+    output_dir = "output/openpose_control"
 
     if not os.path.isdir(output_dir):
         os.makedirs(output_dir)
 
     # Model input
-    image_id = "000038_0"
-    prompt = "Knee-length summer dress in blue with small pink flowers."
+    image_id = "000031_0"
+    # prompt = "Knee-length summer dress in blue with small pink flowers."
+    prompt = "Bright yellow short-sleeve t-shirt."
+
+    openpose = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
 
     # Load pipeline
-    pipeline = StableDiffusionInpaintPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-2-inpainting", torch_dtype=torch.float16
+    controlnet = ControlNetModel.from_pretrained(
+        "fusing/stable-diffusion-v1-5-controlnet-openpose", torch_dtype=torch.float16
+    )
+    
+    pipeline = StableDiffusionControlNetInpaintPipeline.from_pretrained(
+        model_id,
+        controlnet=controlnet,
+        torch_dtype=torch.float16,
+        use_saftensors=True,
+        safety_checker=None
     )
     pipeline = pipeline.to("cuda")
 
@@ -289,10 +315,10 @@ def main():
 
     # Generate and save results
     imgs = design_garment(
-        pipeline, img, seg, prompt, num_images_per_prompt=5
+        pipeline, openpose, img, seg, prompt, num_images_per_prompt=5
     )
     for i, img in enumerate(imgs):
-        out_name = os.path.join(output_dir, f"{image_id}_{i}.jpg")
+        out_name = os.path.join(output_dir, f"{image_id}_yellowtshirt_{i}.jpg")
         img.save(out_name)
         print(f"Saved generated image to: {out_name}")
 
