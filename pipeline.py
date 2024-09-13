@@ -140,6 +140,17 @@ def generate_masks(seg, mask_padding=70, mask_erosion=3, head_erosion=5):
     return body, head
 
 
+def make_inpaint_condition(image, image_mask):
+    image = np.array(image.convert("RGB")).astype(np.float32) / 255.0
+    image_mask = np.array(image_mask.convert("L")).astype(np.float32) / 255.0
+
+    assert image.shape[0:1] == image_mask.shape[0:1], "image and image_mask must have the same image size"
+    image[image_mask > 0.5] = -1.0  # set as masked pixel
+    image = np.expand_dims(image, 0).transpose(0, 3, 1, 2)
+    image = torch.from_numpy(image)
+    return image
+
+
 def preprocess(img, body, head, square_fn=square_pad, size=512):
     if isinstance(img, Image.Image):
         bg = img.getpixel((0, 0))
@@ -172,18 +183,20 @@ def run_model(
     num_images_per_prompt=1,
     num_inference_steps=100,
 ) -> Union[List[Image.Image], np.ndarray]:
-    posprompt = "photograph, beautiful, detailed, detailed shoes, photorealism, detailed hands, detailed feet, detailed fingers, realistic lighting, natural lighting, crystal clear, detailed skin, ultra focus, sharp quality"
+    posprompt = "photograph, beautiful, detailed, detailed shoes, photorealism, detailed hands, detailed feet, detailed fingers, realistic lighting, natural lighting, crystal clear, detailed skin, ultra focus, sharp quality, preserve gender"
     negprompt = "disfigured, ugly, bad, cartoon, anime, 3d, painting, bad hands, bad feet, deformed hands, broken anatomy, deformed, unrealistic, missing body parts, unclear, blurry"
     prompt = prompt + posprompt
 
     # use the pipeline to generate the image
     pose = openpose_model(img)
     pose.save("tmp/pose.png")
+    control_image = make_inpaint_condition(img, seg)
     images = model(
         prompt=prompt,
         # image=img,
         image=img,
-        control_image=pose,
+        # control_image=pose,
+        control_image=[control_image, pose],
         mask_image=seg,
         guidance_scale=guidance_scale,
         num_images_per_prompt=num_images_per_prompt,
@@ -295,9 +308,13 @@ def main():
     openpose = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
 
     # Load pipeline
-    controlnet = ControlNetModel.from_pretrained(
-        "fusing/stable-diffusion-v1-5-controlnet-openpose", torch_dtype=torch.float16
-    )
+    # controlnet = ControlNetModel.from_pretrained(
+    #     "fusing/stable-diffusion-v1-5-controlnet-openpose", torch_dtype=torch.float16
+    # )
+    controlnet = [
+        ControlNetModel.from_pretrained("lllyasviel/control_v11p_sd15_inpaint", torch_dtype=torch.float16),
+        ControlNetModel.from_pretrained("fusing/stable-diffusion-v1-5-controlnet-openpose", torch_dtype=torch.float16)
+    ]
     
     pipeline = StableDiffusionControlNetInpaintPipeline.from_pretrained(
         model_id,
@@ -318,7 +335,7 @@ def main():
         pipeline, openpose, img, seg, prompt, num_images_per_prompt=5
     )
     for i, img in enumerate(imgs):
-        out_name = os.path.join(output_dir, f"{image_id}_yellowtshirt_{i}.jpg")
+        out_name = os.path.join(output_dir, f"{image_id}_yellowtshirt2_{i}.jpg")
         img.save(out_name)
         print(f"Saved generated image to: {out_name}")
 
